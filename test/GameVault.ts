@@ -47,6 +47,22 @@ describe("GameVault", () => {
     await unallowedToken.mint(player1, parseUnits("1", 18))
   });
 
+  describe("setFeeOn()", async () => {
+    it("should revert when sender is not controller ", async () => {
+      await expectRevert(
+        gameVault.connect(player1Signer).setFeeOn(true),
+        "Not controller"
+      );
+    });
+
+    it("should set new Fee", async () => {
+      await gameVault.connect(ownerSigner).setFeeOn(true);
+      expect(await gameVault.feeOn()).to.be.eq(true);
+      await gameVault.connect(ownerSigner).setFeeOn(false);
+      expect(await gameVault.feeOn()).to.be.eq(false);
+    });
+  });
+
   describe("addAsset()", async () => {
     it("should revert when sender is not controller ", async () => {
       await expectRevert(
@@ -122,19 +138,7 @@ describe("GameVault", () => {
         "Not controller"
       );
     });
-
-    it("should transfer token to designated account", async () => {
-      const tokenBalance = await gameVault.getAccountAsset(token.address, player1);
-      await gameVault.connect(ownerSigner).transferAccountAsset(
-        token.address, 
-        player1, 
-        player2,
-        tokenBalance
-      );
-      expect(await gameVault.getAccountAsset(token.address, player1)).to.be.eq(0);
-      expect(await gameVault.getAccountAsset(token.address, player2)).to.be.eq(tokenBalance);
-    });
-
+    
     it("should revert when amount is greater than balance", async () => {
       const tokenBalance = await gameVault.getAccountAsset(token.address, player1);
       await expectRevert(
@@ -146,6 +150,38 @@ describe("GameVault", () => {
         ),
         "Not enough asset in account"
       );
+    });
+
+    it("should transfer token to designated account", async () => {
+      const tokenBalance = await gameVault.getAccountAsset(token.address, player1);
+      await gameVault.connect(ownerSigner).transferAccountAsset(
+        token.address, 
+        player1, 
+        player2,
+        tokenBalance.div(2)
+      );
+      expect(await gameVault.getAccountAsset(token.address, player1)).to.be.eq(tokenBalance.div(2));
+      expect(await gameVault.getAccountAsset(token.address, player2)).to.be.eq(tokenBalance.div(2));
+    });
+
+    it("should transfer token and fee if feeOn is true", async () => {
+      const tokenBalancePlayer1 = await gameVault.getAccountAsset(token.address, player1);
+      const tokenBalancePlayer2 = await gameVault.getAccountAsset(token.address, player2);
+      const assetFeeBalance = await gameVault.getAssetFees(token.address);
+      await gameVault.connect(ownerSigner).setFeeOn(true);
+      await gameVault.connect(ownerSigner).transferAccountAsset(
+        token.address, 
+        player1, 
+        player2,
+        tokenBalancePlayer1
+      );
+      const tokenFee = await gameVault.fee();
+      const tokenFeeDenominator = await gameVault.feeDenominator();
+      const tokenFeeAmount = tokenBalancePlayer1.mul(tokenFee).div(tokenFeeDenominator)
+      expect(await gameVault.getAccountAsset(token.address, player1)).to.be.eq(0);
+      expect(await gameVault.getAccountAsset(token.address, player2))
+        .to.be.eq(tokenBalancePlayer2.add(tokenBalancePlayer1).sub(tokenFeeAmount));
+      expect(await gameVault.getAssetFees(token.address)).to.be.eq(assetFeeBalance.add(tokenFeeAmount));
     });
   });
 

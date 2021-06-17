@@ -9,9 +9,12 @@ contract GameVault {
     using SafeERC20 for IERC20;
 
     mapping(address => bool) public allowedAssets;
-    mapping(address => mapping(address => uint)) public accountAssets; //[token][account]
+    mapping(address => mapping(address => uint)) public accountAssets; // [token][account]
     mapping(address => uint) public assetFees;
     address public controller;
+    bool public feeOn = false;
+    uint public fee = 1;
+    uint public feeDenominator = 1000;
 
     event NewController(address indexed oldController, address indexed newController);
  
@@ -24,12 +27,16 @@ contract GameVault {
         controller = _controller;
     }
 
-    function addAsset(address _address) external onlyController {
+    function setFeeOn(bool _feeOn) public onlyController {
+        feeOn = _feeOn;
+    }
+
+    function addAsset(address _address) public onlyController {
         require(_address != address(0), "Asset is zero address");
         allowedAssets[_address] = true;
     }
 
-    function removeAsset(address _address) external onlyController {
+    function removeAsset(address _address) public onlyController {
         allowedAssets[_address] = false;
     }
 
@@ -45,7 +52,7 @@ contract GameVault {
     function withdraw(address _address, uint _amount) external {
         require(_amount <= accountAssets[_address][msg.sender], "Not enough asset in account");
         require(_amount > 0, "Amount must be greater than 0");
-        
+
         IERC20(_address).transfer(msg.sender, _amount);
         accountAssets[_address][msg.sender] -= _amount;
     }
@@ -55,13 +62,14 @@ contract GameVault {
     ) external onlyController {
         require(_amount <= accountAssets[_tokenAddress][_from], "Not enough asset in account");
         accountAssets[_tokenAddress][_from] -= _amount;
-        accountAssets[_tokenAddress][_to] += _amount;
-    }
 
-    function transferAccountAssetFee(address _tokenAddress, address _from, uint _amount) external onlyController {
-        require(_amount <= accountAssets[_tokenAddress][_from], "Not enough asset in account");
-        accountAssets[_tokenAddress][_from] -= _amount;
-        assetFees[_tokenAddress] += _amount;
+        if (feeOn) {
+            uint feeAmount = _amount * fee / feeDenominator;
+            assetFees[_tokenAddress] += feeAmount;
+            accountAssets[_tokenAddress][_to] += (_amount - feeAmount);
+        } else {
+            accountAssets[_tokenAddress][_to] += _amount;
+        }
     }
 
     function setController(address _controller) public onlyController {
@@ -78,5 +86,9 @@ contract GameVault {
 
     function getAccountAsset(address _tokenaddress, address _accountAddress) public view returns (uint) {
         return accountAssets[_tokenaddress][_accountAddress];
+    }
+
+    function getAssetFees(address _tokenaddress) public view returns (uint) {
+        return assetFees[_tokenaddress];
     }
 }
