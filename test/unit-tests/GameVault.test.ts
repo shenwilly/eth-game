@@ -1,10 +1,10 @@
 import { ethers } from "hardhat";
 import chai from "chai";
-import { ERC20Mock, GameVault, GameVault__factory, WETH9, WETH9__factory } from "../typechain";
+import { ERC20Mock, GameVault, GameVault__factory, WETH9, WETH9__factory } from "../../typechain";
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
 import { parseEther, parseUnits } from "ethers/lib/utils";
-import { getMockERC20 } from "./utils/mocks";
-import { getCurrentTimestamp, increaseTime } from "./utils/time";
+import { getMockERC20 } from "../utils/mocks";
+import { getCurrentTimestamp, increaseTime } from "../utils/time";
 
 const { expect } = chai;
 const { expectRevert, constants } = require('@openzeppelin/test-helpers');
