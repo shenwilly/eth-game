@@ -36,12 +36,6 @@ contract GameVault {
         controller = _controller;
     }
 
-    function setFeeOn(bool _feeOn) public onlyController {
-        feeOn = _feeOn;
-
-        emit NewFeeOn(feeOn);
-    }
-
     function addAsset(address _address) public onlyController {
         require(_address != address(0), "Asset is zero address");
         allowedAssets[_address] = true;
@@ -94,6 +88,12 @@ contract GameVault {
         accountAssets[_tokenAddress][_to] += withdrawAmount;
         
         emit NewTransfer(_tokenAddress, _from, _to, withdrawAmount);
+    }
+
+    function setFeeOn(bool _feeOn) public onlyController {
+        feeOn = _feeOn;
+
+        emit NewFeeOn(feeOn);
     }
 
     function setController(address _controller) public onlyController {
