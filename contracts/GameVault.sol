@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import "hardhat/console.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { IWETH } from "./interfaces/IWETH.sol";
 
 contract GameVault {
     using SafeERC20 for IERC20;
@@ -13,6 +14,7 @@ contract GameVault {
     mapping(address => uint) public assetFees;
     
     address public controller;
+    address public weth;
 
     bool public feeOn = false;
     uint public fee = 1;
@@ -32,8 +34,9 @@ contract GameVault {
         _;
     }
 
-    constructor(address _controller) {
+    constructor(address _controller, address _weth) {
         controller = _controller;
+        weth = _weth;
     }
 
     function addAsset(address _address) public onlyController {
@@ -59,6 +62,15 @@ contract GameVault {
 
         emit NewDeposit(_address, msg.sender, _amount);
     }
+
+    function depositETH() payable external {
+        require(msg.value > 0, "Amount must be greater than 0");
+
+        IWETH(weth).deposit{value: msg.value}();
+        accountAssets[weth][msg.sender] += msg.value;
+
+        emit NewDeposit(weth, msg.sender, msg.value);
+    }
     
     // TODO: locked asset
     function withdraw(address _address, uint _amount) external {
@@ -69,6 +81,17 @@ contract GameVault {
         accountAssets[_address][msg.sender] -= _amount;
 
         emit NewWithdrawal(_address, msg.sender, _amount);
+    }
+    
+    function withdrawETH(uint _amount) external {
+        require(_amount <= accountAssets[weth][msg.sender], "Not enough asset in account");
+        require(_amount > 0, "Amount must be greater than 0");
+
+        IWETH(weth).withdraw(_amount);
+        payable(msg.sender).transfer(_amount);
+        accountAssets[weth][msg.sender] -= _amount;
+
+        emit NewWithdrawal(weth, msg.sender, _amount);
     }
     
     function transferAccountAsset(
@@ -88,6 +111,12 @@ contract GameVault {
         accountAssets[_tokenAddress][_to] += withdrawAmount;
         
         emit NewTransfer(_tokenAddress, _from, _to, withdrawAmount);
+    }
+
+    function timeLockAccountAsset(
+        address _tokenAddress, address _from, address _to, uint _amount
+    ) external onlyController {
+        // TODO   
     }
 
     function setFeeOn(bool _feeOn) public onlyController {
@@ -115,4 +144,6 @@ contract GameVault {
     function getAssetFees(address _tokenaddress) public view returns (uint) {
         return assetFees[_tokenaddress];
     }
+
+    receive() payable external {}
 }

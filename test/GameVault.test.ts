@@ -1,10 +1,10 @@
 import { ethers} from "hardhat";
 import chai from "chai";
-import { ERC20Mock, GameVault, GameVault__factory } from "../typechain";
+import { ERC20Mock, GameVault, GameVault__factory, WETH9, WETH9__factory } from "../typechain";
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
-import { parseUnits } from "ethers/lib/utils";
+import { parseEther, parseUnits } from "ethers/lib/utils";
 import { getMockERC20 } from "./utils/mocks";
-import { BigNumber } from "ethers";
+import { BigNumber, Contract } from "ethers";
 
 const { expect } = chai;
 const { expectRevert, constants } = require('@openzeppelin/test-helpers');
@@ -23,6 +23,7 @@ describe("GameVault", () => {
   let gameVault: GameVault;
   let token: ERC20Mock;
   let unallowedToken: ERC20Mock;
+  let weth: WETH9;
 
   before(async () => {
     [
@@ -34,11 +35,16 @@ describe("GameVault", () => {
     player1 = player1Signer.address;
     player2 = player2Signer.address;
 
+    const WethFactory = (
+      await ethers.getContractFactory("WETH9", ownerSigner)
+    ) as WETH9__factory;
+    weth = await WethFactory.deploy();
+
     const GameVaultFactory = (await ethers.getContractFactory(
       "GameVault",
       ownerSigner
     )) as GameVault__factory;
-    gameVault = await GameVaultFactory.deploy(owner);
+    gameVault = await GameVaultFactory.deploy(owner, weth.address);
 
     token = await getMockERC20("Mock", "MOCK");
     await token.mint(player1, parseUnits("1", 18))
@@ -115,82 +121,102 @@ describe("GameVault", () => {
       );
     });
 
-    it("should increase userAsset & decrease user token balance", async () => {
+    it("should increase accountAsset & vault balance and decrease user token balance", async () => {
       const tokenBalance = await token.balanceOf(player1);
       await token.connect(player1Signer).approve(gameVault.address, tokenBalance);
       await gameVault.connect(player1Signer).deposit(token.address, tokenBalance);
 
       expect(await token.balanceOf(player1)).to.be.eq(0);
+      expect(await token.balanceOf(gameVault.address)).to.be.eq(tokenBalance);
       expect(await gameVault.getAccountAsset(token.address, player1)).to.be.eq(tokenBalance);
+    });
+  });
+
+  describe("depositETH()", async () => {
+    it("should revert when amount is 0", async () => {
+      await expectRevert(
+        gameVault.connect(player1Signer).depositETH(),
+        "Amount must be greater than 0"
+      );
+    });
+
+    it("should increase accountAsset & vault balance", async () => {
+      const ethAmount = parseEther("1");
+      await gameVault.connect(player1Signer).depositETH({
+        value: ethAmount
+      });
+
+      expect(await weth.balanceOf(gameVault.address)).to.be.eq(ethAmount);
+      expect(await gameVault.getAccountAsset(weth.address, player1)).to.be.eq(ethAmount);
     });
   });
 
   describe("transferAccountAsset()", async () => {
     it("should revert when sender is not controller", async () => {
-      const tokenBalance = await gameVault.getAccountAsset(token.address, player1);
+      const accountBalance = await gameVault.getAccountAsset(token.address, player1);
       await expectRevert(
         gameVault.connect(player1Signer).transferAccountAsset(
           token.address, 
           player1, 
           player2,
-          tokenBalance
+          accountBalance
         ), 
         "Not controller"
       );
     });
     
     it("should revert when amount is greater than balance", async () => {
-      const tokenBalance = await gameVault.getAccountAsset(token.address, player1);
+      const accountBalance = await gameVault.getAccountAsset(token.address, player1);
       await expectRevert(
         gameVault.connect(ownerSigner).transferAccountAsset(
           token.address, 
           player1, 
           player2,
-          tokenBalance.add(1)
+          accountBalance.add(1)
         ),
         "Not enough asset in account"
       );
     });
 
     it("should transfer token to designated account", async () => {
-      const tokenBalance = await gameVault.getAccountAsset(token.address, player1);
+      const accountBalance = await gameVault.getAccountAsset(token.address, player1);
       await gameVault.connect(ownerSigner).transferAccountAsset(
         token.address, 
         player1, 
         player2,
-        tokenBalance.div(2)
+        accountBalance.div(2)
       );
-      expect(await gameVault.getAccountAsset(token.address, player1)).to.be.eq(tokenBalance.div(2));
-      expect(await gameVault.getAccountAsset(token.address, player2)).to.be.eq(tokenBalance.div(2));
+      expect(await gameVault.getAccountAsset(token.address, player1)).to.be.eq(accountBalance.div(2));
+      expect(await gameVault.getAccountAsset(token.address, player2)).to.be.eq(accountBalance.div(2));
     });
 
     it("should transfer token and fee if feeOn is true", async () => {
-      const tokenBalancePlayer1 = await gameVault.getAccountAsset(token.address, player1);
-      const tokenBalancePlayer2 = await gameVault.getAccountAsset(token.address, player2);
+      const accountBalancePlayer1 = await gameVault.getAccountAsset(token.address, player1);
+      const accountBalancePlayer2 = await gameVault.getAccountAsset(token.address, player2);
       const assetFeeBalance = await gameVault.getAssetFees(token.address);
       await gameVault.connect(ownerSigner).setFeeOn(true);
       await gameVault.connect(ownerSigner).transferAccountAsset(
         token.address, 
         player1, 
         player2,
-        tokenBalancePlayer1
+        accountBalancePlayer1
       );
       const tokenFee = await gameVault.fee();
       const tokenFeeDenominator = await gameVault.feeDenominator();
-      const tokenFeeAmount = tokenBalancePlayer1.mul(tokenFee).div(tokenFeeDenominator)
+      const tokenFeeAmount = accountBalancePlayer1.mul(tokenFee).div(tokenFeeDenominator)
       expect(await gameVault.getAccountAsset(token.address, player1)).to.be.eq(0);
       expect(await gameVault.getAccountAsset(token.address, player2))
-        .to.be.eq(tokenBalancePlayer2.add(tokenBalancePlayer1).sub(tokenFeeAmount));
+        .to.be.eq(accountBalancePlayer2.add(accountBalancePlayer1).sub(tokenFeeAmount));
       expect(await gameVault.getAssetFees(token.address)).to.be.eq(assetFeeBalance.add(tokenFeeAmount));
     });
   });
 
   describe("withdraw()", async () => {
     it("should revert when amount is greater balance", async () => {
-      const tokenBalance = await gameVault.getAccountAsset(token.address, player1)
-      const addedTokenBalance = tokenBalance.add(1);
+      const accountBalance = await gameVault.getAccountAsset(token.address, player1)
+      const addedAccountBalance = accountBalance.add(1);
       await expectRevert(
-        gameVault.connect(player1Signer).withdraw(token.address, addedTokenBalance),
+        gameVault.connect(player1Signer).withdraw(token.address, addedAccountBalance),
         "Not enough asset in account"
       );
     });
@@ -202,18 +228,54 @@ describe("GameVault", () => {
       );
     });
 
-    it("should decrease userAsset & increase user token balance", async () => {
+    it("should decrease accountAsset & vault balance and increase user token balance", async () => {
       const tokenAmount = parseUnits("1", 18);
       await token.mint(player1, tokenAmount);
       await token.connect(player1Signer).approve(gameVault.address, tokenAmount);
       await gameVault.connect(player1Signer).deposit(token.address, tokenAmount);
 
-      const tokenBalanceBefore = await token.balanceOf(player1);
-      const vaultTokenBalanceBefore = await gameVault.accountAssets(token.address, player1);
-      await gameVault.connect(player1Signer).withdraw(token.address, vaultTokenBalanceBefore);
+      const player1TokenBalanceBefore = await token.balanceOf(player1);
+      const vaultTokenBalanceBefore = await token.balanceOf(gameVault.address);
+      const player1AccountBalanceBefore = await gameVault.accountAssets(token.address, player1);
+      await gameVault.connect(player1Signer).withdraw(token.address, player1AccountBalanceBefore);
 
-      expect(await token.balanceOf(player1)).to.be.eq(tokenBalanceBefore.add(vaultTokenBalanceBefore));
+      expect(await token.balanceOf(player1)).to.be.eq(player1TokenBalanceBefore.add(player1AccountBalanceBefore));
+      expect(await token.balanceOf(gameVault.address)).to.be.eq(vaultTokenBalanceBefore.sub(player1AccountBalanceBefore));
       expect(await gameVault.getAccountAsset(token.address, player1)).to.be.eq(0);
+    });
+  });
+
+  describe("withdrawETH()", async () => {
+    it("should revert when amount is greater balance", async () => {
+      const accountBalance = await gameVault.getAccountAsset(weth.address, player1)
+      const addedAccountBalance = accountBalance.add(1);
+      await expectRevert(
+        gameVault.connect(player1Signer).withdrawETH(addedAccountBalance),
+        "Not enough asset in account"
+      );
+    });
+
+    it("should revert when amount is 0", async () => {
+      await expectRevert(
+        gameVault.connect(player1Signer).withdrawETH(0),
+        "Amount must be greater than 0"
+      );
+    });
+
+    it("should decrease accountAsset & vault balance and increase user token balance", async () => {
+      const ethAmount = parseEther("1");
+      await gameVault.connect(player1Signer).depositETH({
+        value: ethAmount
+      });
+
+      const player1EthBalanceBefore = await player1Signer.getBalance();
+      const vaultWethBalanceBefore = await weth.balanceOf(gameVault.address);
+      const player1AccountBalanceBefore = await gameVault.accountAssets(weth.address, player1);
+      await gameVault.connect(player1Signer).withdrawETH(player1AccountBalanceBefore);
+      
+      expect(await player1Signer.getBalance()).to.be.gte(player1EthBalanceBefore);
+      expect(await weth.balanceOf(gameVault.address)).to.be.eq(vaultWethBalanceBefore.sub(player1AccountBalanceBefore));
+      expect(await gameVault.getAccountAsset(weth.address, player1)).to.be.eq(0);
     });
   });
 
