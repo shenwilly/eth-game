@@ -1,10 +1,10 @@
-import { ethers} from "hardhat";
+import { ethers } from "hardhat";
 import chai from "chai";
 import { ERC20Mock, GameVault, GameVault__factory, WETH9, WETH9__factory } from "../typechain";
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
 import { parseEther, parseUnits } from "ethers/lib/utils";
 import { getMockERC20 } from "./utils/mocks";
-import { BigNumber, Contract } from "ethers";
+import { getCurrentTimestamp, increaseTime } from "./utils/time";
 
 const { expect } = chai;
 const { expectRevert, constants } = require('@openzeppelin/test-helpers');
@@ -86,6 +86,7 @@ describe("GameVault", () => {
 
     it("should return true for added asset", async () => {
       await gameVault.connect(ownerSigner).addAsset(token.address);
+      await gameVault.connect(ownerSigner).addAsset(weth.address);
       expect(await gameVault.getAsset(token.address)).to.be.eq(true);
     });
 
@@ -207,6 +208,157 @@ describe("GameVault", () => {
       expect(await gameVault.getAccountAsset(token.address, player1)).to.be.eq(0);
       expect(await gameVault.getAccountAsset(token.address, player2))
         .to.be.eq(accountBalancePlayer2.add(accountBalancePlayer1).sub(tokenFeeAmount));
+      expect(await gameVault.getAssetFees(token.address)).to.be.eq(assetFeeBalance.add(tokenFeeAmount));
+    });
+  });
+
+  describe("transferAccountAssetWithTimeLock()", async () => {
+    it("should revert when sender is not controller", async () => {
+      const accountBalance = await gameVault.getAccountAsset(token.address, player1);
+      await expectRevert(
+        gameVault.connect(player1Signer).transferAccountAssetWithTimeLock(
+          token.address, 
+          player1, 
+          player2,
+          accountBalance,
+          100
+        ), 
+        "Not controller"
+      );
+    });
+    
+    it("should revert when amount is greater than balance", async () => {
+      const accountBalance = await gameVault.getAccountAsset(token.address, player1);
+      await expectRevert(
+        gameVault.connect(ownerSigner).transferAccountAssetWithTimeLock(
+          token.address, 
+          player1, 
+          player2,
+          accountBalance.add(1),
+          100,
+        ),
+        "Not enough asset in account"
+      );
+    });
+
+    it("should reduce and lock token", async () => {
+      const accountBalance = await gameVault.getAccountAsset(token.address, player1);
+      const lockedAssetsBefore = await gameVault.getAccountLockedAssetIds(player2);
+      await gameVault.connect(ownerSigner).transferAccountAssetWithTimeLock(
+        token.address, 
+        player1, 
+        player2,
+        accountBalance.div(2),
+        100,
+      );
+      const lockedAssetsAfter = await gameVault.getAccountLockedAssetIds(player2);
+
+      expect(lockedAssetsAfter.length).to.be.eq(lockedAssetsBefore.length + 1);
+      expect(await gameVault.getAccountAsset(token.address, player1)).to.be.eq(accountBalance.div(2));
+    });
+  });
+
+  describe("unlockAccountAssets()", async () => {
+    // TODO: multi id unlock tests
+
+    it("should revert when block.timestamp < unlockedAt", async () => {
+      const now = await getCurrentTimestamp()
+      const tokenAmount = parseUnits("1", 18);
+
+      await token.mint(player1, tokenAmount);
+      await token.connect(player1Signer).approve(gameVault.address, tokenAmount);
+      await gameVault.connect(player1Signer).deposit(token.address, tokenAmount);
+
+      const tx = await gameVault.connect(ownerSigner).transferAccountAssetWithTimeLock(
+        token.address,
+        player1,
+        player2,
+        tokenAmount,
+        now + 86400
+      );
+
+      const receipt = await tx.wait()
+      let lockedAssetId;
+      if (receipt.events!.length > 1) {
+        lockedAssetId = receipt.events![1].args![0];
+      } else {
+        lockedAssetId = receipt.events![0].args![0];
+      }
+
+      await expectRevert(
+        gameVault.connect(ownerSigner).unlockAccountAssets([lockedAssetId]),
+        "Asset not unlocked yet"
+      );
+    });
+
+    it("should release locked token", async () => {
+      const now = await getCurrentTimestamp()
+      const delay = 86400;
+      const tokenAmount = parseUnits("1", 18);
+
+      await token.mint(player1, tokenAmount);
+      await token.connect(player1Signer).approve(gameVault.address, tokenAmount);
+      await gameVault.connect(player1Signer).deposit(token.address, tokenAmount);
+
+      const tx = await gameVault.connect(ownerSigner).transferAccountAssetWithTimeLock(
+        token.address,
+        player1,
+        player2,
+        tokenAmount,
+        now + delay
+      );
+      const receipt = await tx.wait()
+
+      let lockedAssetId;
+      if (receipt.events!.length > 1) {
+        lockedAssetId = receipt.events![1].args![0];
+      } else {
+        lockedAssetId = receipt.events![0].args![0];
+      }
+
+      const accountBalancePlayer2Before = await gameVault.accountAssets(token.address, player2);
+      await increaseTime(delay);
+      await gameVault.connect(ownerSigner).setFeeOn(false);
+      await gameVault.connect(ownerSigner).unlockAccountAssets([lockedAssetId]);
+      expect(await gameVault.accountAssets(token.address, player2)).to.be.eq(accountBalancePlayer2Before.add(tokenAmount));
+    });
+
+    it("should release locked token minus fee if feeOn is true", async () => {
+      await gameVault.connect(ownerSigner).setFeeOn(true);
+      const now = await getCurrentTimestamp()
+      const delay = 86400;
+      const tokenAmount = parseUnits("1", 18);
+
+      await token.mint(player1, tokenAmount);
+      await token.connect(player1Signer).approve(gameVault.address, tokenAmount);
+      await gameVault.connect(player1Signer).deposit(token.address, tokenAmount);
+
+      const tx = await gameVault.connect(ownerSigner).transferAccountAssetWithTimeLock(
+        token.address,
+        player1,
+        player2,
+        tokenAmount,
+        now + delay
+      );
+      const receipt = await tx.wait()
+
+      let lockedAssetId;
+      if (receipt.events!.length > 1) {
+        lockedAssetId = receipt.events![1].args![0];
+      } else {
+        lockedAssetId = receipt.events![0].args![0];
+      }
+
+      const tokenFee = await gameVault.fee();
+      const tokenFeeDenominator = await gameVault.feeDenominator();
+      const tokenFeeAmount = tokenAmount.mul(tokenFee).div(tokenFeeDenominator)
+      const assetFeeBalance = await gameVault.getAssetFees(token.address);
+      const accountBalance = await gameVault.accountAssets(token.address, player2);
+
+      await increaseTime(delay);
+      await gameVault.connect(ownerSigner).unlockAccountAssets([lockedAssetId]);
+      expect(await gameVault.accountAssets(token.address, player2))
+        .to.be.eq(accountBalance.add(tokenAmount).sub(tokenFeeAmount));
       expect(await gameVault.getAssetFees(token.address)).to.be.eq(assetFeeBalance.add(tokenFeeAmount));
     });
   });
