@@ -11,12 +11,21 @@ contract GameVault {
     mapping(address => bool) public allowedAssets;
     mapping(address => mapping(address => uint)) public accountAssets; // [token][account]
     mapping(address => uint) public assetFees;
+    
     address public controller;
+
     bool public feeOn = false;
     uint public fee = 1;
     uint public feeDenominator = 1000;
 
     event NewController(address indexed oldController, address indexed newController);
+    event NewFeeOn(bool indexed feeOn);
+    event AssetAdded(address indexed asset);
+    event AssetRemoved(address indexed asset);
+    event NewDeposit(address indexed asset, address indexed from, uint amount);
+    event NewWithdrawal(address indexed asset, address indexed from, uint amount);
+    event NewTransfer(address indexed asset, address indexed from, address indexed to, uint amount);
+    event NewFeeTransfer(address indexed asset, uint amount);
  
     modifier onlyController {
         require(msg.sender == controller, "Not controller");
@@ -29,15 +38,22 @@ contract GameVault {
 
     function setFeeOn(bool _feeOn) public onlyController {
         feeOn = _feeOn;
+
+        emit NewFeeOn(feeOn);
     }
 
     function addAsset(address _address) public onlyController {
         require(_address != address(0), "Asset is zero address");
         allowedAssets[_address] = true;
+
+        emit AssetAdded(_address);
     }
 
     function removeAsset(address _address) public onlyController {
+        require(allowedAssets[_address], "Asset has not been added");
         allowedAssets[_address] = false;
+
+        emit AssetRemoved(_address);
     }
 
     function deposit(address _address, uint _amount) external {
@@ -46,6 +62,8 @@ contract GameVault {
 
         IERC20(_address).transferFrom(msg.sender, address(this), _amount);
         accountAssets[_address][msg.sender] += _amount;
+
+        emit NewDeposit(_address, msg.sender, _amount);
     }
     
     // TODO: locked asset
@@ -55,6 +73,8 @@ contract GameVault {
 
         IERC20(_address).transfer(msg.sender, _amount);
         accountAssets[_address][msg.sender] -= _amount;
+
+        emit NewWithdrawal(_address, msg.sender, _amount);
     }
     
     function transferAccountAsset(
@@ -63,13 +83,17 @@ contract GameVault {
         require(_amount <= accountAssets[_tokenAddress][_from], "Not enough asset in account");
         accountAssets[_tokenAddress][_from] -= _amount;
 
+        uint withdrawAmount = _amount;
         if (feeOn) {
             uint feeAmount = _amount * fee / feeDenominator;
             assetFees[_tokenAddress] += feeAmount;
-            accountAssets[_tokenAddress][_to] += (_amount - feeAmount);
-        } else {
-            accountAssets[_tokenAddress][_to] += _amount;
+            withdrawAmount -= feeAmount;
+            
+            emit NewFeeTransfer(_tokenAddress, feeAmount);
         }
+        accountAssets[_tokenAddress][_to] += withdrawAmount;
+        
+        emit NewTransfer(_tokenAddress, _from, _to, withdrawAmount);
     }
 
     function setController(address _controller) public onlyController {

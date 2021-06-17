@@ -225,6 +225,13 @@ describe("GameVault", () => {
       );
     });
 
+    it("should revert when removing unadded asset ", async () => {
+      await expectRevert(
+        gameVault.connect(ownerSigner).removeAsset(unallowedToken.address),
+        "Asset has not been added"
+      );
+    });
+
     it("should return false for removed asset", async () => {
       await gameVault.connect(ownerSigner).removeAsset(token.address);
       expect(await gameVault.getAsset(token.address)).to.be.eq(false);
