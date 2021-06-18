@@ -29,6 +29,8 @@ contract GameController is Ownable {
 
     address public vault;
     uint lockDuration; // timestamp
+
+    // TODO: events
     
     constructor(address _vault, uint _duration) {
         vault = _vault;

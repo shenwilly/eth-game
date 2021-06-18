@@ -22,6 +22,7 @@ const config: HardhatUserConfig = {
     compilers: [
       { version: "0.8.0", settings: {} },
       { version: "0.4.18", settings: {} },
+      { version: "0.4.16", settings: {} },
     ],
   },
   networks: {
